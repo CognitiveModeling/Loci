@@ -1,0 +1,61 @@
+{                                                                                                     
+  "model_path": "cater_level1",
+  "datatype": "cater",
+  "dataset": "CATER",
+  "latent_type": "snitch_tracker",
+  "num_workers": 2,
+  "prefetch_factor": 2,
+  "learning_rate": 0.0001, 
+  "sequence_len": 300, 
+  "backprop_steps": 3,
+  "epochs": 1000,                                                                                   
+  "updates": 50000000,
+  "closed_loop": false,
+  "teacher_forcing": 10,                                                                              
+  "statistics_offset": 10,                                                                              
+  "msssim": false,
+  "load_optimizers": false,
+  "scheduled_sampling": false,
+  "entity_pretraining_end": 60000,
+  "background_pretraining_end": 30000,
+  "model": {
+        "level": 1,
+        "batch_size": 16,
+        "num_objects": 10,
+        "img_channels": 3,
+        "input_size": [240, 320], 
+        "latent_size": [15, 20], 
+        "patch_grid_size": [15, 20], 
+        "gestalt_size": 24,
+        "vae_factor": 1e-5,
+        "object_regularizer": 1,
+        "position_regularizer": 1,
+        "supervision_factor": 0,
+        "time_regularizer": 1,
+        "object_permanence_strength": 2,
+        "encoder": {
+            "channels": 48,
+            "level1_channels": 24,
+            "num_layers": 3,
+            "reg_lambda": 1e-10
+        },
+        "predictor": {
+            "heads": 10,
+            "layers": 5,
+            "channels_multiplier": 10,
+            "reg_lambda": 1e-10
+        },
+        "decoder": {
+            "channels": 48,
+            "level1_channels": 3,
+            "num_layers": 5
+        },
+        "background": {
+            "learning_rate": 0.0001, 
+            "num_layers": 1, 
+            "reg_lambda": 1e-10,
+            "latent_channels": 48,
+            "level1_channels": 24
+        }
+    }
+}                          
