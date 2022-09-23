@@ -171,7 +171,6 @@ class LatentEpropPredictor(nn.Module):
         reg_lambda: float,
         num_objects: int, 
         gestalt_size: int, 
-        vae_factor: float, 
         batch_size: int,
         camera_view_matrix = None,
         zero_elevation = None
@@ -201,9 +200,9 @@ class LatentEpropPredictor(nn.Module):
 
         self.vae = nn.Sequential(
             LambdaModule(lambda x: rearrange(x, 'b c -> b c 1 1')),
-            ResidualBlock(gestalt_size, gestalt_size * 2, kernel_size=1),
-            VariationalFunction(factor = vae_factor),
+            ResidualBlock(gestalt_size, gestalt_size, kernel_size=1),
             nn.Sigmoid(),
+            LambdaModule(lambda x: x + x * (1 - x) * th.randn_like(x)),
             LambdaModule(lambda x: rearrange(x, '(b o) c 1 1 -> b (o c)', o=num_objects))
         )
 

@@ -3,10 +3,6 @@ from utils.configuration import Configuration
 import time
 import torch as th
 import numpy as np
-import pyvista as pv
-from pyvista import Plane, Light
-import vtk
-import pyvista as pv
 from einops import rearrange, repeat, reduce
 import cv2
 

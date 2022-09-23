@@ -16,11 +16,11 @@ CFG_PATH = "cfg.json"
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-cfg", default=CFG_PATH)
-    parser.add_argument("-num-gpus", default=-1, type=int)
+    parser.add_argument("-num-gpus", default=1, type=int)
     parser.add_argument("-n", default=-1, type=int)
     parser.add_argument("-load", default="", type=str)
     parser.add_argument("-dataset-file", default="", type=str)
-    parser.add_argument("-device", default=-1, type=int)
+    parser.add_argument("-device", default=0, type=int)
     parser.add_argument("-testset", action="store_true")
     mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument("-train", action="store_true")
@@ -81,21 +81,21 @@ if __name__ == "__main__":
             cfg.model.latent_size[1] = cfg.model.patch_grid_size[1] * 2
 
     if cfg.datatype == "video":
-        trainset = VideoDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
-        valset = VideoDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
-        testset = VideoDataset("./", cfg.dataset, "test", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
+        trainset = None if args.save and args.testset else VideoDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
+        valset   = None if args.save else VideoDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
+        testset  = VideoDataset("./", cfg.dataset, "test", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
         cfg.sequence_len += 1
 
     if cfg.datatype == "multiple-videos":
-        trainset = MultipleVideosDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
-        valset   = MultipleVideosDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
+        trainset = None if args.save and args.testset else MultipleVideosDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
+        valset   = None if args.save else MultipleVideosDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
         testset  = MultipleVideosDataset("./", cfg.dataset, "test", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)), cfg.sequence_len + 1)
         cfg.sequence_len += 1
 
     if cfg.datatype == "clevrer":
-        trainset = ClevrerDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
-        valset   = copy(trainset)
-        testset  = copy(trainset)
+        trainset = None if args.save and args.testset else ClevrerDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
+        valset   = None if args.save else ClevrerDataset("./", cfg.dataset, "val",   (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
+        testset  = ClevrerDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
 
         valset.train  = False
         testset.train = False
@@ -103,8 +103,8 @@ if __name__ == "__main__":
         cfg.sequence_len += 1
 
     if cfg.datatype == "cater":
-        trainset = CaterDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
-        valset   = CaterDataset("./", cfg.dataset, "val",   (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
+        trainset = None if args.save and args.testset else CaterDataset("./", cfg.dataset, "train", (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
+        valset   = None if args.save else CaterDataset("./", cfg.dataset, "val",   (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
         testset  = CaterDataset("./", cfg.dataset, "test",  (cfg.model.latent_size[1] * 2**(cfg.model.level*2), cfg.model.latent_size[0] * 2**(cfg.model.level*2)))
 
         
@@ -124,6 +124,8 @@ if __name__ == "__main__":
             training.train_latent_action_classifier(cfg, trainset, testset, args.load)
     elif args.train:
         training.run(cfg, num_gpus, trainset, valset, testset, args.load, (cfg.model.level*2))
+    elif args.eval:
+        evaluation.evaluate(cfg, num_gpus, testset if args.testset else valset, args.load, (cfg.model.level*2))
     elif args.save:
         evaluation.save(cfg, testset if args.testset else trainset, args.load, (cfg.model.level*2), cfg.model.input_size, args.objects, args.nice, args.individual)
     elif args.export:

@@ -6,51 +6,104 @@ import math
 import cv2
 import h5py
 import os
+import pickle
 
 __author__ = "Manuel Traub"
+
+class RamImage():
+    def __init__(self, path):
+        
+        fd = open(path, 'rb')
+        img_str = fd.read()
+        fd.close()
+
+        self.img_raw = np.frombuffer(img_str, np.uint8)
+
+    def to_numpy(self):
+        return cv2.imdecode(self.img_raw, cv2.IMREAD_COLOR) 
 
 class CaterSample(data.Dataset):
     def __init__(self, root_path: str, data_path: str, size: Tuple[int, int]):
 
         data_path = os.path.join(root_path, data_path, "train", f'{size[0]}x{size[1]}')
 
-        self.frames = []
+        frames = []
         self.size = size
 
         for file in os.listdir(data_path):
             if file.startswith("frame") and (file.endswith(".jpg") or file.endswith(".png")):
-                self.frames.append(os.path.join(data_path, file))
+                frames.append(os.path.join(data_path, file))
 
-        self.frames.sort()
+        frames.sort()
+        self.imgs = []
+        for path in frames:
+            self.imgs.append(RamImage(path))
 
     def get_data(self):
 
         frames = np.zeros((301,3,self.size[1], self.size[0]),dtype=np.float32)
-        for i in range(len(self.frames)):
-            img = cv2.imread(self.frames[i])
+        for i in range(len(self.imgs)):
+            img = self.imgs[i].to_numpy()
             frames[i] = img.transpose(2, 0, 1).astype(np.float32) / 255.0
 
         return frames
 
 
 class CaterDataset(data.Dataset):
+
+    def save(self):
+        state = { 'samples': self.samples, 'labels': self.labels }
+        with open(self.file, "wb") as outfile:
+    	    pickle.dump(state, outfile)
+
+    def load(self):
+        with open(self.file, "rb") as infile:
+            state = pickle.load(infile)
+            self.samples = state['samples']
+            self.labels  = state['labels']
+
     def __init__(self, root_path: str, dataset_name: str, type: str, size: Tuple[int, int]):
 
-        data_path = f'data/data/video/{dataset_name}'
-        data_path = os.path.join(root_path, data_path)
+        data_path  = f'data/data/video/{dataset_name}'
+        data_path  = os.path.join(root_path, data_path)
+        self.file  = os.path.join(data_path, f'dataset-{size[0]}x{size[1]}-{type}.pickle')
         self.train = (type == "train")
         self.val   = (type == "val")
         self.test  = (type == "test")
 
-        self.samples = []
-        self.labels  = []
-        self.length = 0
-        for dir in next(os.walk(data_path))[1]:
-            if dir.startswith("0"): 
+        self.samples    = []
+        self.labels     = []
+
+        if os.path.exists(self.file):
+            self.load()
+        else:
+
+            samples         = list(filter(lambda x: x.startswith("0"), next(os.walk(data_path))[1]))
+            num_all_samples = len(samples)
+            num_samples     = 0
+            sample_start    = 0
+
+            if type == "train":
+                num_samples = int(num_all_samples * 0.7 * 0.8)
+            if type == "val":
+                num_samples = int(num_all_samples * 0.7 * 0.2)
+            if type == "test":
+                num_samples = int(num_all_samples * 0.3)
+
+            if type == "val":
+                sample_start = int(num_all_samples * 0.7 * 0.8)
+            if type == "test":
+                sample_start = int(num_all_samples * 0.7)
+
+            for i, dir in enumerate(samples[sample_start:sample_start+num_samples]):
                 self.samples.append(CaterSample(data_path, dir, size))
-                self.labels.append(os.path.join(data_path, "labels", f"{dir}.json"))
-                self.length += 1
+                self.labels.append(json.load(open(os.path.join(data_path, "labels", f"{dir}.json"))))
+
+                print(f"Loading CATER {type} [{i * 100 / num_samples:.2f}]", flush=True)
+
+            self.save()
         
+        self.length     = len(self.samples)
         self.background = None
         if "background.jpg" in os.listdir(data_path):
             self.background = cv2.imread(os.path.join(data_path, "background.jpg"))
@@ -58,7 +111,7 @@ class CaterDataset(data.Dataset):
             self.background = self.background.transpose(2, 0, 1).astype(np.float32) / 255.0
             self.background = self.background.reshape(1, self.background.shape[0], self.background.shape[1], self.background.shape[2])
 
-        print(f"CaterDataset: {self.length}")
+        print(f"CaterDataset[{type}]: {self.length}")
 
         if len(self) == 0:
             raise FileNotFoundError(f'Found no dataset at {self.data_path}')
@@ -305,24 +358,11 @@ class CaterDataset(data.Dataset):
         return color_visible, color_hidden
 
     def __len__(self):
-        if self.train:
-            return int(self.length * 0.7 * 0.8)
-        
-        if self.val:
-            return int(self.length * 0.7 * 0.2)
-
-        return int(self.length * 0.3)
+        return self.length
 
     def __getitem__(self, index: int):
-        #print(f"loading: {index}")
 
-        if self.val:
-            index += int(self.length * 0.7 * 0.8)
-
-        if self.test:
-            index += int(self.length * 0.7)
-
-        label = json.load(open(self.labels[index]))
+        label = self.labels[index]
 
         snitch_positions  = self.snitch_position(label)
         snitch_label      = self.localize_label(label)

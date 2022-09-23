@@ -105,30 +105,32 @@ class AggressiveDownConv(nn.Module):
         return skip + self.alpha * self.layers(input)
 
 class AggressiveConvTo1x1(nn.Module):
-    def __init__(self, channels, size: Union[int, Tuple[int, int]]):
+    def __init__(self, in_channels, out_channels, size: Union[int, Tuple[int, int]]):
         super(AggressiveConvTo1x1, self).__init__()
         
         self.layers = nn.Sequential(
             nn.Conv2d(
-                in_channels  = channels, 
-                out_channels = channels, 
+                in_channels  = in_channels, 
+                out_channels = in_channels, 
                 kernel_size  = 5,
                 stride       = 3,
                 padding      = 3
             ),
             nn.ReLU(),
             nn.Conv2d(
-                in_channels  = channels, 
-                out_channels = channels, 
+                in_channels  = in_channels, 
+                out_channels = out_channels, 
                 kernel_size  = ((size[0] + 1)//3 + 1, (size[1] + 1)//3 + 1)
             )
         )
-        self.alpha = nn.Parameter(th.zeros(1) + 1e-12)
-        self.size  = size
+        self.alpha  = nn.Parameter(th.zeros(1) + 1e-12)
+        self.size   = size
+        self.factor = out_channels // in_channels
 
 
     def forward(self, input: th.Tensor):
         skip = reduce(input, 'b c h w -> b c 1 1', 'mean')
+        skip = repeat(skip,  'b c 1 1 -> b (c n) 1 1', n = self.factor)
         return skip + self.alpha * self.layers(input)
 
 class PixelToPosition(nn.Module):
@@ -256,7 +258,8 @@ class GPEncoder(nn.Module):
         _gestalt_encoder = []
         _gestalt_encoder.append( 
             AggressiveConvTo1x1(
-                channels = max(hidden_channels, gestalt_size),
+                in_channels = hidden_channels, 
+                out_channels = max(hidden_channels, gestalt_size),
                 size = latent_size
             )
         )

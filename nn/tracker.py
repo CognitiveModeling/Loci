@@ -44,7 +44,7 @@ class L1GridDistance(nn.Module):
         top1 = th.mean((label == target_label).float())
         top5 = th.mean(th.sum((th.topk(probabilities, 5, dim=1)[1] == target_label.unsqueeze(dim=1)).float(), dim=1))
 
-        return l1, top1, top5
+        return l1, top1, top5, label
 
 class L2TrackingDistance(nn.Module):
     def __init__(self, camera_view_matrix, zero_elevation):
@@ -55,25 +55,7 @@ class L2TrackingDistance(nn.Module):
     def forward(self, position, target_position):
 
         position = self.to_world(position)
-        return th.sqrt(th.sum((position - target_position)**2, dim=1))
-
-class PixelDistance(nn.Module):
-    def __init__(self, camera_view_matrix, zero_elevation):
-        super(PixelDistance, self).__init__()
-
-        self.to_screen = WolrdToScreen(camera_view_matrix, zero_elevation)
-
-    def forward(self, position, target_position):
-
-        target_position = self.to_screen(target_position).detach().clone()
-        position        = position.detach().clone()
-
-        target_position[:,0] = (target_position[:,0] + 1) * 0.5 * 240
-        target_position[:,1] = (target_position[:,1] + 1) * 0.5 * 320
-
-        position[:,0] = (position[:,0] + 1) * 0.5 * 240
-        position[:,1] = (position[:,1] + 1) * 0.5 * 320
-        return th.sqrt(th.sum((position - target_position)**2, dim=1))
+        return th.sqrt(th.sum((position - target_position)**2, dim=1)), position
 
 
 class TrackingLoss(nn.Module):

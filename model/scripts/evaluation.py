@@ -15,7 +15,9 @@ import numpy as np
 import cv2
 from pathlib import Path
 import shutil
+import pickle
 from einops import rearrange, repeat, reduce
+from model.scripts.training import eval_net
 
 def preprocess(tensor, scale=1, normalize=False, mean_std_normalize=False):
 
@@ -50,6 +52,42 @@ def color_mask(mask):
 	[ 255,   0, 128 ],
 	[   0, 255, 128 ],
 	[   0, 128, 255 ],
+	[ 255, 128, 128 ],
+	[ 128, 255, 128 ],
+	[ 128, 128, 255 ],
+	[ 255, 128, 128 ],
+	[ 128, 255, 128 ],
+	[ 128, 128, 255 ],
+	[ 255, 128, 255 ],
+	[ 128, 255, 255 ],
+	[ 128, 255, 255 ],
+	[ 255, 255, 128 ],
+	[ 255, 255, 128 ],
+	[ 255, 128, 255 ],
+	[ 128,   0,   0 ],
+	[   0,   0, 128 ],
+	[ 128, 128,   0 ],
+	[ 128,   0, 128 ],
+	[   0, 128, 128 ],
+	[   0, 128,   0 ],
+	[ 128, 128,   0 ],
+	[ 128, 128,   0 ],
+	[ 128,   0, 128 ],
+	[ 128,   0, 128 ],
+	[   0, 128, 128 ],
+	[   0, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
     ], device = mask.device) / 255.0
 
     colors = colors.view(1, -1, 3, 1, 1)
@@ -99,9 +137,45 @@ def to_rgb_object(tensor, o):
 	[ 255,   0, 128 ],
 	[   0, 255, 128 ],
 	[   0, 128, 255 ],
+	[ 255, 128, 128 ],
+	[ 128, 255, 128 ],
+	[ 128, 128, 255 ],
+	[ 255, 128, 128 ],
+	[ 128, 255, 128 ],
+	[ 128, 128, 255 ],
+	[ 255, 128, 255 ],
+	[ 128, 255, 255 ],
+	[ 128, 255, 255 ],
+	[ 255, 255, 128 ],
+	[ 255, 255, 128 ],
+	[ 255, 128, 255 ],
+	[ 128,   0,   0 ],
+	[   0,   0, 128 ],
+	[ 128, 128,   0 ],
+	[ 128,   0, 128 ],
+	[   0, 128, 128 ],
+	[   0, 128,   0 ],
+	[ 128, 128,   0 ],
+	[ 128, 128,   0 ],
+	[ 128,   0, 128 ],
+	[ 128,   0, 128 ],
+	[   0, 128, 128 ],
+	[   0, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
+	[ 128, 128, 128 ],
     ], device = tensor.device) / 255.0
 
-    colors = colors.view(12,3,1,1)
+    colors = colors.view(48,3,1,1)
     return colors[o] * tensor
 
 def to_rgb(tensor: th.Tensor):
@@ -238,20 +312,24 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
     # create model 
     net = Loci(
         cfg_net,
-        camera_view_matrix = dataset.cam,
-        zero_elevation     = dataset.z,
+        camera_view_matrix = dataset.cam if cfg.datatype == 'cater' else None,
+        zero_elevation     = dataset.z if cfg.datatype == 'cater' else None,
         closed_loop = False,
         teacher_forcing = 1000000
     )
 
     # load model
     if file != '':
+        print(f"load {file} to device {device}")
         state = th.load(file, map_location=device)
-        net.load_state_dict(state["model"])
 
-    if net.get_init_status() < 1:
-        net.inc_init_level()
-    
+        # backward compatibility
+        model = {}
+        for key, value in state["model"].items():
+            model[key.replace(".module.", ".")] = value
+
+        net.load_state_dict(model)
+
     net = net.to(device=device)
     net.eval()
     
@@ -259,6 +337,7 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
     scale  = size[0] // (cfg_net.latent_size[0] * 2**active_layer)
 
     init = net.get_init_status()
+    print(f"Init status: {init}")
     mseloss = nn.MSELoss()
 
     prioritize = Prioritize(cfg_net.num_objects).to(device)
@@ -266,19 +345,23 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
     with th.no_grad():
         for i, input in enumerate(dataloader):
 
-            tensor = input[0].float().to(device)
+            tensor         = input[0].float().to(device)
+            old_background = input[1].to(device)
+
+            if cfg.datatype == 'cater' and i == 0:
+                net.background.set_background(old_background[:,0])
 
             input  = tensor[:,0]
             target = th.clip(tensor[:,0], 0, 1)
             error  = None
 
-            mse_loss  = 0
-            ssim_loss = 0
-            mask_cur  = None
-            mask_last     = None
-            position_last = None
-            gestalt_last  = None
-            priority_last = None
+            mse_loss       = 0
+            ssim_loss      = 0
+            mask_cur       = None
+            mask_last      = None
+            position_last  = None
+            gestalt_last   = None
+            priority_last  = None
 
             for t in range(-cfg.teacher_forcing, tensor.shape[1]-1):
                 if t >= 10 and cfg.closed_loop:
@@ -315,6 +398,17 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
                 position_last = position_next.clone()
                 gestalt_last  = gestalt_next.clone()
                 priority_last = priority_next.clone()
+
+                if t == 0:
+                    _gestalt = rearrange(gestalt_last, 'b (n c) -> b n c', n = cfg_net.num_objects)
+                    _position    = rearrange(position_last,    'b (n c) -> b n c', n = cfg_net.num_objects)
+                    for n in range(0, cfg_net.num_objects):
+                        with open(f'latent-{i:04d}-{n:02d}.pickle', "wb") as outfile:
+                            state = {
+                                "gestalt":  th.round(th.clip(_gestalt[0:1,n], 0, 1)),
+                                "position": _position[0:1,n],
+                            }
+                            pickle.dump(state, outfile)
 
                 bg_error  = th.sqrt(reduce((target - background_next)**2, 'b c h w -> b 1 h w', 'mean')).detach()
                 error     = th.sqrt(reduce((target - output_next)**2, 'b c h w -> b 1 h w', 'mean')).detach()
@@ -379,7 +473,7 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
                     img[:,18:size[0]*2+18, -size[1]*2-18:-18]    = preprocess(output, 2)[0]
                     img[:,size[0]*2+18*2:-18, -size[1]*2-18:-18] = preprocess(background_next, 2)[0]
 
-                    for o in range(cfg_net.num_objects // 2):
+                    for o in range(int(np.ceil(cfg_net.num_objects / 2))):
 
                         img[:,18:18+size[0],18+size[1]*2+6+o*(6+size[1]):18+size[1]*2+(o+1)*(6+size[1])]               = preprocess(object_next[:,o*2], normalize=True)[0]
                         img[:,18+size[0]+6:18+size[0]*2+6,18+size[1]*2+6+o*(6+size[1]):18+size[1]*2+(o+1)*(6+size[1])] = to_rgb_object(mask_next[0,o*2], o*2)
@@ -696,4 +790,71 @@ def export_latent(cfg: Configuration, dataset: Dataset, net_file, hdf5_file, hdf
                 net.get_init_status(),
                 avg_openings / avgsum
             ), flush=True)
+
+def evaluate(cfg: Configuration, num_gpus: int, dataset: Dataset, file, active_layer):
+
+    rank = cfg.device
+    world_size = -1
+
+    print(f'rank {rank} online', flush=True)
+    device = th.device(rank)
+
+    if world_size < 0:
+        rank = 0
+
+    path = None
+    if rank == 0:
+        path = model_path(cfg, overwrite=False)
+        cfg.save(path)
+
+    cfg_net = cfg.model
+
+    background = None
+    if world_size > 0:
+        dataset = DatasetPartition(dataset, rank, world_size)
+
+    net = Loci(
+        cfg = cfg_net,
+        camera_view_matrix = dataset.cam if cfg.datatype == 'cater' else None,
+        zero_elevation     = dataset.z if cfg.datatype == 'cater' else None,
+        sampler = sampler if cfg.scheduled_sampling else None,
+        teacher_forcing = cfg.teacher_forcing
+    )
+
+    net = net.to(device=device)
+
+    if rank == 0:
+        print(f'Loaded model with {sum([param.numel() for param in net.parameters()]):7d} parameters', flush=True)
+        print(f'  States:     {sum([param.numel() for param in net.initial_states.parameters()]):7d} parameters', flush=True)
+        print(f'  Encoder:    {sum([param.numel() for param in net.encoder.parameters()]):7d} parameters', flush=True)
+        print(f'  Decoder:    {sum([param.numel() for param in net.decoder.parameters()]):7d} parameters', flush=True)
+        print(f'  predictor:  {sum([param.numel() for param in net.predictor.parameters()]):7d} parameters', flush=True)
+        print(f'  background: {sum([param.numel() for param in net.background.parameters()]):7d} parameters', flush=True)
+        print("\n")
+    
+    # load model
+    if file != '':
+        print(f"load {file} to device {device}")
+        state = th.load(file, map_location=device)
+
+        # backward compatibility
+        model = {}
+        for key, value in state["model"].items():
+            model[key.replace(".module.", ".")] = value
+
+        net.load_state_dict(model)
+
+    dataloader = DataLoader(
+        dataset, 
+        pin_memory = True, 
+        num_workers = cfg.num_workers, 
+        batch_size = cfg_net.batch_size, 
+        shuffle = False,
+        drop_last = True, 
+        prefetch_factor = cfg.prefetch_factor, 
+        persistent_workers = True
+    )
+
+    th.backends.cudnn.benchmark = True
+    eval_net(net, 'Test', dataset, dataloader, device, cfg, 0)
 

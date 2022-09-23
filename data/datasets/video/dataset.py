@@ -12,97 +12,91 @@ from typing import Tuple, Union, List
 import numpy as np
 import cv2
 import os
+import pickle
 
 __author__ = "Manuel Traub"
+
+class RamImage():
+    def __init__(self, path):
+        
+        fd = open(path, 'rb')
+        img_str = fd.read()
+        fd.close()
+
+        self.img_raw = np.frombuffer(img_str, np.uint8)
+
+    def to_numpy(self):
+        return cv2.imdecode(self.img_raw, cv2.IMREAD_COLOR) 
+
 
 class VideoDataset(data.Dataset):
     def __init__(self, root_path: str, dataset_name: str, type: str, size: Tuple[int, int], time: int, subset: bool = False):
 
         data_path = dataset_name if subset else f'data/data/video/{dataset_name}'
         data_path = os.path.join(root_path, data_path)
-        self.data_path = data_path
+        self.file = os.path.join(data_path, f'dataset-{size[0]}x{size[1]}-{type}.pickle')
 
-        self.test_in_train = ("test" not in os.listdir(data_path))
-        self.type = type
-
-        if self.test_in_train or type == "train":
-            data_path = os.path.join(data_path, "train")
+        if os.path.exists(self.file):
+            self.load()
         else:
-            data_path = os.path.join(data_path, "test")
+            data_path = os.path.join(data_path, "train")
+            data_path = os.path.join(data_path, f'{size[0]}x{size[1]}')
 
-        data_path = os.path.join(data_path, f'{size[0]}x{size[1]}')
+            frames = []
 
-        self.frames = []
-        self.backgrounds = []
+            for file in os.listdir(data_path):
+                if file.startswith("frame") and (file.endswith(".jpg") or file.endswith(".png")):
+                    frames.append(os.path.join(data_path, file))
 
-        for file in os.listdir(data_path):
-            if file.startswith("frame") and (file.endswith(".jpg") or file.endswith(".png")):
-                self.frames.append(os.path.join(data_path, file))
+            frames.sort()
 
-            if file.startswith("background") and (file.endswith(".jpg") or file.endswith(".png")):
-                self.backgrounds.append(os.path.join(data_path, file))
+            if not subset:
+                if type == "train":
+                    frames = frames[:int(len(frames) * 0.9)]
+                else:
+                    frames = frames[int(len(frames) * 0.9):]
 
-        self.frames.sort()
-        self.backgrounds.sort()
+            num_samples = len(frames)
 
-        if not subset:
-            if self.test_in_train and type == "train":
-                self.frames = self.frames[:int(len(self.frames) * 0.9)]
-                if len(self.backgrounds) > 1:
-                    self.backgrounds = self.backgrounds[:int(len(self.backgrounds) * 0.9)]
+            self.imgs = []
+            for i, path in enumerate(frames):
+                self.imgs.append(RamImage(path))
 
-            if self.test_in_train and type == "test":
-                self.frames = self.frames[int(len(self.frames) * 0.9):]
-                if len(self.backgrounds) > 1:
-                    self.backgrounds = self.backgrounds[int(len(self.backgrounds) * 0.9):]
+                if not subset and i % 1000 == 0:
+                    print(f"Loading Video {type} [{i * 100 / num_samples:.2f}]", flush=True)
 
-        self.length = len(self.frames) - time + 1
+
+            self.save()
+
+        self.length = len(self.imgs) - time + 1
         self.time   = time
         self.size   = size
+
+        if not subset:
+            print(f'loaded {type} Video Dataset {dataset_name} [{self.length}]')
 
         if len(self) == 0:
             print(subset, self.length, len(self.frames), self.time)
             raise FileNotFoundError(f'Found no dataset at {self.data_path}')
+
+    def save(self):
+        with open(self.file, "wb") as outfile:
+    	    pickle.dump(self.imgs, outfile)
+
+    def load(self):
+        with open(self.file, "rb") as infile:
+            self.imgs = pickle.load(infile)
 
     def __len__(self):
         return max(self.length, 0)
 
     def __getitem__(self, index: int):
         
-        """
-        if self.backgrounds:
-            frames = []
-            backgrounds = []
-            for i in range(self.time):
-                img = cv2.imread(self.frames[index+i])
-                bg  = None 
-                if len(self.backgrounds) == 1:
-                    bg = cv2.imread(self.backgrounds[0])
-                else:
-                    bg = cv2.imread(self.backgrounds[index+i])
-
-                img = img.transpose(2, 0, 1).astype(float) / 255.0
-                img = img.reshape(1, img.shape[0], img.shape[1], img.shape[2])
-
-                bg = bg.transpose(2, 0, 1).astype(float) / 255.0
-                bg = bg.reshape(1, bg.shape[0], bg.shape[1], bg.shape[2])
-
-                frames.append(img)
-                if len(self.backgrounds) > 1:
-                    backgrounds.append(bg)
-
-            if len(self.backgrounds) > 1:
-                return np.concatenate(frames), np.concatenate(backgrounds)
-
-            return np.concatenate(frames), bg
-        """
-
         frames = []
         frames = np.zeros((self.time, 3, self.size[1], self.size[0]), dtype=np.float32)
         for i in range(self.time):
-            img = cv2.imread(self.frames[index+i])
-            img = img.transpose(2, 0, 1).astype(np.float32) / 255.0
-            frames[i] = img
+            img = self.imgs[index + i].to_numpy()
+            frames[i] = img.transpose(2, 0, 1).astype(np.float32) / 255.0
 
         return frames, np.zeros((1, 3, self.size[1], self.size[0]), dtype=np.float32)
 
@@ -153,4 +147,3 @@ class MultipleVideosDataset(data.Dataset):
                     return dataset.__getitem__(int(index)), self.background
 
                 return dataset.__getitem__(int(index))
-

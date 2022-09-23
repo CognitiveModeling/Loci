@@ -1,7 +1,7 @@
 import torch as th
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from pytorch_msssim import msssim, ssim
+from pytorch_msssim import ms_ssim as msssim, ssim
 import cv2
 
 from torch.nn.parallel import DistributedDataParallel
@@ -59,7 +59,9 @@ def load_model(
     optimizer_background,
     load_optimizers = True
 ):
-    state = th.load(file)
+    device = th.device(cfg.device)
+    state = th.load(file, map_location=device)
+    print(f"loaded {file} to {device}")
     print(f"load optimizers: {load_optimizers}")
 
     if load_optimizers:
@@ -83,12 +85,12 @@ def load_model(
         for n in range(len(optimizer_background.param_groups)):
             optimizer_background.param_groups[n]['lr'] = cfg.model.background.learning_rate
 
-    rand_state = net.state_dict()
-    for k, v in rand_state.items():
-        if k not in state["model"]:
-            state["model"][k] = v
+    # backward compatibility
+    model = {}
+    for k, v in state['model'].items():
+        model[k.replace("module.","")] = v
 
-    net.load_state_dict(state["model"])
+    net.load_state_dict(model)
 
 def run(cfg: Configuration, num_gpus: int, trainset: Dataset, valset: Dataset, testset: Dataset, file, active_layer):
     print("run training", flush=True)
@@ -249,6 +251,9 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
             target_position = input[2].float().to(device) if cfg.datatype == 'cater' else None
             target_label    = input[3].to(device) if cfg.datatype == 'cater' else None
 
+            if cfg.datatype == 'cater' and epoch == 0 and batch_index == 0:
+                net_parallel.background.set_background(old_background[:,0])
+
             # run complete forward pass to get a position estimation
             position    = None
             gestalt     = None
@@ -276,8 +281,8 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
                     target     = th.clip(input_next, 0, 1)
                     pos_target = target_position[:,t+1] if cfg.datatype == 'cater' else None
 
-                if num_updates <= cfg.background_pretraining_end and net.get_init_status() < 1:
-                    output = net_parallel(input, detach=True, reset=(t == -cfg.teacher_forcing))
+                if num_updates <= cfg.background_pretraining_steps and net.get_init_status() < 0.001:
+                    output = net_parallel(input, train_background=True, detach=True, reset=(t == -cfg.teacher_forcing))
 
                     loss = l1loss(output, target)
                     optimizer_background.zero_grad()
@@ -312,8 +317,8 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
                     avg_openings.update(net.get_openings())
 
                     if t == sequence_len - 1 and cfg.datatype == 'cater':
-                        l1, top1, top5 = l1distance(snitch_position, target_label)
-                        l2             = th.mean(l2distance(snitch_position, target_position[:,-1]))
+                        l1, top1, top5, _ = l1distance(snitch_position, target_label)
+                        l2                = th.mean(l2distance(snitch_position, target_position[:,-1])[0])
 
                         avg_l1_distance.update(l1.item())
                         avg_l2_distance.update(l2.item())
@@ -354,7 +359,7 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
                     optimizer_decoder.zero_grad()
                     optimizer_predictor.zero_grad()
 
-                    if num_updates >= cfg.entity_pretraining_end or net.get_init_status() > 1:
+                    if num_updates >= cfg.entity_pretraining_steps or net.get_init_status() > 0.001:
                         optimizer_background.zero_grad()
 
                     loss.backward()
@@ -366,20 +371,13 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
                         optimizer_decoder.step()
                         optimizer_predictor.step()
 
-                        if num_updates >= cfg.entity_pretraining_end or net.get_init_status() > 1:
+                        if num_updates >= cfg.entity_pretraining_steps or net.get_init_status() > 0.001:
                             optimizer_background.step()
-
-
-                if num_updates == cfg.background_pretraining_end and net.get_init_status() < 1:
-                    net.inc_init_level()
-
-                if num_updates == cfg.entity_pretraining_end and net.get_init_status() < 2:
-                    net.inc_init_level()
 
                 avgloss.update(loss.item())
 
                 num_updates += 1
-                print("Epoch[{}/{}/{}/{}]: {}, {}, Loss: {:.2e}|{:.2e}|{:.2e}, reg: {:.2e}|{:.2e}|{:.2e}, snitch:, {:.2e}|{:.2f}|{:.2f}|{:.2f}, i: {:d}, obj: {:.1f}, openings: {:.2e}".format(
+                print("Epoch[{}/{}/{}/{}]: {}, {}, Loss: {:.2e}|{:.2e}|{:.2e}, reg: {:.2e}|{:.2e}|{:.2e}, snitch:, {:.2e}|{:.2f}|{:.2f}|{:.2f}, i: {:.2f}, obj: {:.1f}, openings: {:.2e}".format(
                     num_updates,
                     num_time_steps,
                     sequence_len,
@@ -455,7 +453,6 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
     l1distance = L1GridDistance(dataset.cam, dataset.z).to(device)
     l2distance = L2TrackingDistance(dataset.cam, dataset.z).to(device)
     l2loss     = TrackingLoss(dataset.cam, dataset.z).to(device)
-    l2pixel    = PixelDistance(dataset.cam, dataset.z).to(device)
 
     avgloss = 0
     avg_position_loss = 0
@@ -482,13 +479,6 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
     min_loss = 100000
     num_updates = 0
     num_time_steps = 0
-    l2pixel_all = None
-    l2pixel_visible = None
-    l2pixel_contained = None
-    l2pixel_visible_sum = None
-    l2pixel_contained_sum = None
-    l2pixel_rand = None
-
     l2_contained = []
     for t in range(cfg.sequence_len):
         l2_contained.append([])
@@ -497,11 +487,14 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
         for batch_index, input in enumerate(dataloader):
             
             tensor           = input[0]
-            background       = input[1].to(device)
+            old_background   = input[1].to(device)
             target_position  = input[2].float().to(device)
             target_label     = input[3].to(device)
             snitch_contained = input[4].to(device)
             snitch_contained_time = th.zeros_like(snitch_contained)
+
+            if batch_index == 0:
+                net_parallel.background.set_background(old_background[:,0])
             
             snitch_contained_time[:,0] = snitch_contained[:,0]
             for t in range(1, snitch_contained.shape[1]):
@@ -522,21 +515,11 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
 
             sequence_len = (tensor.shape[1]-1) 
 
-            if l2pixel_all is None:
-                l2pixel_all  = th.zeros(sequence_len, device=device)
-                l2pixel_rand = th.zeros(sequence_len, device=device)
-                l2pixel_visible = th.zeros(sequence_len, device=device)
-                l2pixel_contained = th.zeros(sequence_len, device=device)
-                l2pixel_visible_sum = th.zeros(sequence_len, device=device)+1e-30
-                l2pixel_contained_sum = th.zeros(sequence_len, device=device)+1e-30
-
-            input      = tensor[:,0:1].to(device)
+            input      = tensor[:,0].to(device)
             input_next = input
-            target     = th.clip(input[:,0], 0, 1).detach()
-            bg_input   = background[:,0:1]
-            bg_target  = background[:,0]
-            pos_target = target_position[:,0]
-            error      = th.sqrt(reduce((target - bg_target)**2, 'b c h w -> b 1 h w', 'mean')).detach()
+            target     = th.clip(input, 0, 1).detach()
+            pos_target = target_position[:,0] if cfg.datatype == 'cater' else None
+            error      = None
 
             for t in range(-cfg.teacher_forcing, sequence_len):
                 if t >= 0:
@@ -544,46 +527,35 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
                 
                 if t >= 0:
                     input      = input_next
-                    input_next = tensor[:,t+1:t+2].to(device)
-                    target     = th.clip(input_next[:,0], 0, 1)
-                    pos_target = target_position[:,t+1]
+                    input_next = tensor[:,t+1].to(device)
+                    target     = th.clip(input_next, 0, 1)
+                    pos_target = target_position[:,t+1] if cfg.datatype == 'cater' else None
 
-                output, position, gestalt, priority, mask, _, _, _, position_loss, object_loss, time_loss, snitch_position = net_parallel(
+                output, position, gestalt, priority, mask, object, background, position_loss, object_loss, time_loss, snitch_position = net_parallel(
                     input, 
                     error,
-                    bg_input,
                     mask,
                     position,
                     gestalt,
                     priority,
                     reset = (t == -cfg.teacher_forcing),
-                    evaluate = True
+                    test = True
                 )
 
                 init = max(0, min(1, net.get_init_status()))
 
-                bg_error = th.sqrt(reduce((target - bg_target)**2, 'b c h w -> b 1 h w', 'mean')).detach()
-                error    = th.sqrt(reduce((target - output[:,0])**2, 'b c h w -> b 1 h w', 'mean')).detach()
+                bg_error = th.sqrt(reduce((target - background)**2, 'b c h w -> b 1 h w', 'mean')).detach()
+                error    = th.sqrt(reduce((target - output)**2, 'b c h w -> b 1 h w', 'mean')).detach()
                 error    = th.sqrt(error) * bg_error
 
-                mask     = mask[:,0].detach()
-                position = position[:,0].detach()
-                gestalt  = gestalt[:,0].detach()
-                priority = priority[:,0].detach()
+                mask     = mask.detach()
+                position = position.detach()
+                gestalt  = gestalt.detach()
+                priority = priority.detach()
 
                 if t >= 0:
-                    l2 = l2pixel(snitch_position, target_position[:,t+1])
-                    l2pixel_all[t] += th.mean(l2).detach()
-                    l2pixel_visible[t] += th.sum(l2.detach() * (1 - snitch_contained[:,t+1]))
-                    l2pixel_contained[t] += th.sum(l2.detach() * snitch_contained[:,t+1])
 
-                    l2pixel_visible_sum[t] += th.sum(1 - snitch_contained[:,t+1])
-                    l2pixel_contained_sum[t] += th.sum(snitch_contained[:,t+1])
-
-                    l2 = l2pixel(th.rand_like(snitch_position) * 2 - 1, target_position[:,t+1])
-                    l2pixel_rand[t] += th.mean(l2.detach())
-
-                    l2 = l2distance(snitch_position, target_position[:,t+1])
+                    l2, _ = l2distance(snitch_position, target_position[:,t+1])
                     for b in range(snitch_contained_time.shape[0]):
                         c = snitch_contained_time[b,t].item()
                         if c > 0.5:
@@ -591,8 +563,16 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
 
 
                 if t == sequence_len - 1:
-                    l1, top1, top5 = l1distance(snitch_position, target_label)
-                    l2             = th.mean(l2distance(snitch_position, target_position[:,-1]))
+                    l1, top1, top5, label = l1distance(snitch_position, target_label)
+                    l2, world_position    = l2distance(snitch_position, target_position[:,-1])
+                    l2                    = th.mean(l2)
+
+                    batch_size = label.shape[0]
+                    for n in range(batch_size):
+                        print(f"Sample {batch_size * batch_index + n:04d}: ", end="")
+                        print(f"Label: {label[n].item():02d}, Target: {target_label[n].long().item():02d}, ", end="")
+                        print(f"World-Position: {world_position[n,0].item():.5f}|{world_position[n,1].item():.5f}|{world_position[n,2].item():.5f}, ", end="")
+                        print(f"Target-Position: {target_position[n,-1,0].item():.5f}|{target_position[n,-1,1].item():.5f}|{target_position[n,-1,2].item():.5f}, ", flush=True)
 
                     avg_l1_distance = avg_l1_distance + l1.item()
                     avg_l2_distance = avg_l2_distance + l2.item()
@@ -601,7 +581,7 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
                     avg_tracking_sum  = avg_tracking_sum + 1
                 
                 if t >= cfg.statistics_offset:
-                    loss = mseloss(output[:,0] * bg_error, target * bg_error)
+                    loss = mseloss(output * bg_error, target * bg_error)
                     avg_position_sum  = avg_position_sum + 1
                     avg_object_sum3   = avg_object_sum3 + 1
                     avg_time_sum      = avg_time_sum + 1
@@ -616,7 +596,7 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
 
                 fg_mask = th.gt(bg_error, 0.1).float().detach()
 
-                cliped_output = th.clip(output[:,0], 0, 1)
+                cliped_output = th.clip(output, 0, 1)
                 target        = th.clip(target * fg_mask * (1 - init) + target * init, 0, 1)
 
                 loss = None
@@ -629,7 +609,7 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
                 avgsum   = avgsum + 1
 
                 num_updates += 1
-                print("{}[{}/{}/{}]: {}, Loss: {:.2e}|{:.2e}, snitch:, {:.2e}, Top1: {:.4f}, Top5:, {:.4f}, L1: {:.4f}, L2: {:.4f}, Pixel-L2: {:.2f}|{:.2f}|{:.2f}|{:.2f}, i: {:.2f}, obj: {:.1f}, openings: {:.2e}".format(
+                print("{}[{}/{}/{}]: {}, Loss: {:.2e}|{:.2e}, snitch:, {:.2e}, top1: {:.4f}, top5: {:.4f}, L1:, {:.6f}, L2: {:.6f}, i: {:.2f}, obj: {:.1f}, openings: {:.2e}".format(
                     prefix,
                     num_updates,
                     num_time_steps,
@@ -638,26 +618,14 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
                     np.abs(avgloss/avgsum),
                     avg_object_loss/avg_object_sum,
                     avg_tracking_loss / avg_time_sum,
-                    avg_top1_accuracy / avg_tracking_sum,
-                    avg_top5_accuracy / avg_tracking_sum,
+                    avg_top1_accuracy / avg_tracking_sum * 100,
+                    avg_top5_accuracy / avg_tracking_sum * 100,
                     avg_l1_distance / avg_tracking_sum,
                     avg_l2_distance  / avg_tracking_sum,
-                    th.sum(l2pixel_all) / num_time_steps,
-                    th.sum(l2pixel_visible) / th.sum(l2pixel_visible_sum),
-                    th.sum(l2pixel_contained) / th.sum(l2pixel_contained_sum),
-                    th.sum(l2pixel_rand) / num_time_steps,
                     net.get_init_status(),
                     avg_num_objects / avg_num_objects_sum,
                     avg_openings / avg_openings_sum,
                 ), flush=True)
-
-    l2pixel_all = l2pixel_all / avg_tracking_sum
-    l2pixel_rand = l2pixel_rand / avg_tracking_sum
-    l2pixel_visible = l2pixel_visible / l2pixel_visible_sum
-    l2pixel_contained = l2pixel_contained / l2pixel_contained_sum
-    
-    for t in range(l2pixel_all.shape[0]):
-        print(f"L2[{t+1:03d}]: all: {l2pixel_all[t].item():.4f}, visible: {l2pixel_visible[t].item():.4f}, contained: {l2pixel_contained[t].item():.4f}, rand: {l2pixel_rand[t].item():.4f}")
 
     print("\\addplot+[mark=none,name path=quantil9,trialcolorb,opacity=0.1,forget plot] plot coordinates {")
     for t in range(cfg.sequence_len):

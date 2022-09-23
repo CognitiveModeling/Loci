@@ -10,7 +10,7 @@ from nn.encoder import GPEncoder
 from nn.predictor import LatentEpropPredictor
 from utils.utils import PrintGradient, InitialLatentStates
 from utils.loss import MaskModulatedObjectLoss, ObjectModulator, TranslationInvariantObjectLoss, PositionLoss
-from nn.background import BackgroundEnhancer
+from nn.background import BackgroundEnhancer, PrecalculatedBackground
 
 class Loci(nn.Module):
     def __init__(
@@ -49,7 +49,6 @@ class Loci(nn.Module):
             heads              = cfg.predictor.heads,
             layers             = cfg.predictor.layers,
             reg_lambda         = cfg.predictor.reg_lambda,
-            vae_factor         = cfg.vae_factor,
             batch_size         = cfg.batch_size,
             camera_view_matrix = camera_view_matrix,
             zero_elevation     = zero_elevation
@@ -65,26 +64,28 @@ class Loci(nn.Module):
             num_layers       = cfg.decoder.num_layers
         )
 
-        self.background = BackgroundEnhancer(
-            input_size        = cfg.input_size,
-            gestalt_size      = cfg.gestalt_size,
-            img_channels      = cfg.img_channels,
-            deepth            = cfg.background.num_layers, 
-            latent_channels   = cfg.background.latent_channels,
-            level1_channels   = cfg.background.level1_channels,
-            reg_lambda        = cfg.background.reg_lambda,
-            vae_factor         = cfg.vae_factor,
-            batch_size        = cfg.batch_size,
-        )
+        if cfg.background.use:
+            self.background = BackgroundEnhancer(
+                input_size        = cfg.input_size,
+                gestalt_size      = cfg.background.gestalt_size,
+                img_channels      = cfg.img_channels,
+                depth             = cfg.background.num_layers, 
+                latent_channels   = cfg.background.latent_channels,
+                level1_channels   = cfg.background.level1_channels,
+                batch_size        = cfg.batch_size,
+            )
+        else:
+            self.background = PrecalculatedBackground(
+                input_size   = cfg.input_size,
+                img_channels = cfg.img_channels,
+            )
 
         self.initial_states = InitialLatentStates(
             gestalt_size               = cfg.gestalt_size,
             num_objects                = cfg.num_objects,
             size                       = cfg.input_size,
-            object_permanence_strength = cfg.object_permanence_strength
         )
 
-        self.background_layer_offset = int(np.log2(cfg.latent_size[0] // cfg.patch_grid_size[0])) - 1
 
         self.translation_invariant_object_loss = TranslationInvariantObjectLoss(cfg.num_objects, teacher_forcing)
         self.mask_modulated_object_loss        = MaskModulatedObjectLoss(cfg.num_objects, teacher_forcing)
@@ -106,11 +107,6 @@ class Loci(nn.Module):
         assert len(set(init)) == 1
         return init[0]
 
-    def inc_init_level(self):
-        for module in self.modules():
-            if callable(getattr(module, "step_init", None)):
-                module.step_init()
-
     def get_openings(self):
         return self.predictor.get_openings()
 
@@ -124,7 +120,7 @@ class Loci(nn.Module):
             if module != self and callable(getattr(module, "reset_state", None)):
                 module.reset_state()
 
-    def forward(self, *input, reset=True, detach=True, mode='end2end', evaluate=False, train_background=False):
+    def forward(self, *input, reset=True, detach=True, mode='end2end', evaluate=False, train_background=False, test=False):
 
         if detach:
             self.detach()
@@ -132,10 +128,10 @@ class Loci(nn.Module):
         if reset:
             self.reset_state()
 
-        if train_background or self.get_init_status() < 1:
+        if train_background:
             return self.background(*input)[1]
 
-        return self.run_end2end(*input, evaluate=evaluate)
+        return self.run_end2end(*input, evaluate=evaluate, test=test)
 
     def run_encoder(
         self, 
@@ -154,10 +150,9 @@ class Loci(nn.Module):
         gestalt: th.Tensor,
         priority: th.Tensor,
         bg_mask: th.Tensor,
-        background: th.Tensor,
-        latent_bg: th.Tensor
+        background: th.Tensor
     ):
-        mask, object = self.decoder(latent_bg, position, gestalt, priority)
+        mask, object = self.decoder(position, gestalt, priority)
 
         mask   = th.softmax(th.cat((mask, bg_mask), dim=1), dim=1) 
         object = th.cat((th.sigmoid(object - 2.5), background), dim=1)
@@ -181,7 +176,8 @@ class Loci(nn.Module):
         position: th.Tensor = None,
         gestalt: th.Tensor = None,
         priority: th.Tensor = None,
-        evaluate = False
+        evaluate = False,
+        test     = False
     ):
         output_sequence     = list()
         position_sequence   = list()
@@ -195,19 +191,16 @@ class Loci(nn.Module):
         position_loss = th.tensor(0, device=input.device)
         object_loss   = th.tensor(0, device=input.device)
         time_loss     = th.tensor(0, device=input.device)
-        latent_bg     = None
         bg_mask       = None
 
         if error is None or mask is None:
-            bg_mask, background, latent_bg, _ = self.background(input)
+            bg_mask, background, _ = self.background(input)
             error    = th.sqrt(reduce((input - background)**2, 'b c h w -> b 1 h w', 'mean')).detach()
-        else:
-            latent_bg = self.background.get_last_latent_gird()
 
         position, gestalt, priority = self.initial_states(error, mask, position, gestalt, priority)
 
         if mask is None:
-            mask     = self.decoder(latent_bg, position, gestalt, priority)[0]
+            mask     = self.decoder(position, gestalt, priority)[0]
             mask     = th.softmax(th.cat((mask, bg_mask), dim=1), dim=1) 
 
         
@@ -216,10 +209,10 @@ class Loci(nn.Module):
         object_last = None
 
         position_last = position
-        object_last   = self.decoder(latent_bg, position_last, gestalt)[-1]
+        object_last   = self.decoder(position_last, gestalt)[-1]
 
         # background and cores ponding mask for the next time point
-        bg_mask, background, latent_bg, raw_background = self.background(input, error, mask[:,-1:])
+        bg_mask, background, raw_background = self.background(input, error, mask[:,-1:])
 
         # position and gestalt for the current time point
         position, gestalt, priority = self.run_encoder(input, error, mask, object_last, position, priority)
@@ -228,16 +221,16 @@ class Loci(nn.Module):
         position, gestalt, priority, snitch_position = self.predictor(position, gestalt, priority) 
 
         # combinded background and objects (masks) for next timepoint
-        output, mask, object = self.run_decoder(position, gestalt, priority, bg_mask, background, latent_bg)
+        output, mask, object = self.run_decoder(position, gestalt, priority, bg_mask, background)
 
-        if not evaluate:
+        if not evaluate and not test:
 
             #regularize to small possition chananges over time
             position_loss = position_loss + self.position_loss(position, position_last.detach(), mask[:,:-1].detach())
 
             # regularize to encode last visible object
-            object_cur       = self.decoder(latent_bg, position, gestalt)[-1]
-            object_modulated = self.decoder(latent_bg, *self.modulator(position, gestalt, mask[:,:-1]))[-1]
+            object_cur       = self.decoder(position, gestalt)[-1]
+            object_modulated = self.decoder(*self.modulator(position, gestalt, mask[:,:-1]))[-1]
             object_loss      = object_loss + self.mask_modulated_object_loss(
                 object_cur, 
                 object_modulated.detach(), 
@@ -253,8 +246,8 @@ class Loci(nn.Module):
                 position.detach(),
             )
 
-        if evaluate:
-            object = self.run_decoder(position, gestalt, None, bg_mask, background, latent_bg)[-1]
+        if evaluate and not test:
+            object = self.run_decoder(position, gestalt, None, bg_mask, background)[-1]
 
         return (
             output, 

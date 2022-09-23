@@ -2,7 +2,7 @@ import torch as th
 import torchvision as tv
 from torch import nn
 from utils.utils import BatchToSharedObjects, SharedObjectsToBatch, LambdaModule
-from pytorch_msssim import msssim, ssim
+from pytorch_msssim import ms_ssim as msssim, ssim
 from einops import rearrange, repeat, reduce
 
 __author__ = "Manuel Traub"

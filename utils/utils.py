@@ -85,8 +85,7 @@ class InitialLatentStates(nn.Module):
             self, 
             gestalt_size: int, 
             num_objects: int, 
-            size: Tuple[int, int],
-            object_permanence_strength: int 
+            size: Tuple[int, int]
         ):
         super(InitialLatentStates, self).__init__()
 
@@ -95,9 +94,7 @@ class InitialLatentStates(nn.Module):
         self.gestalt_mean  = nn.Parameter(th.zeros(1, gestalt_size))
         self.gestalt_std   = nn.Parameter(th.ones(1, gestalt_size))
         self.std           = nn.Parameter(th.zeros(1))
-        self.object_permanence_strength = object_permanence_strength
 
-        self.register_buffer('init', th.zeros(1).long())
         self.register_buffer('priority', th.arange(num_objects).float() * 25, persistent=False)
         self.register_buffer('threshold', th.ones(1) * 0.5)
         self.last_mask = None
@@ -119,12 +116,6 @@ class InitialLatentStates(nn.Module):
     def set_level(self, level):
         self.level = level
 
-    def get_init(self):
-        return self.init.item()
-
-    def step_init(self):
-        self.init = self.init + 1
-
     def forward(
         self, 
         error: th.Tensor, 
@@ -142,16 +133,10 @@ class InitialLatentStates(nn.Module):
         
         if mask is not None:
             mask           = reduce(mask[:,:-1], 'b c h w -> (b c) 1' , 'max').detach()
-
-            if self.get_init() < 2 or self.object_permanence_strength == 0:
-                self.last_mask = mask - self.threshold
-            elif self.object_permanence_strength <= 1:
-                self.last_mask = self.last_mask + mask - self.threshold
-            else:
-                self.last_mask = self.last_mask + th.maximum(mask - self.threshold, th.zeros_like(mask))
+            self.last_mask = th.maximum(self.last_mask, mask)
   
         std  = repeat(self.std, '1 -> (b o) 1', b = batch_size, o=self.num_objects)
-        mask = (self.last_mask > 0).float().detach()
+        mask = (self.last_mask > self.threshold).float().detach()
 
         gestalt_rand = th.randn((batch_size * self.num_objects, self.gestalt_size), device = device)
         gestalt_new  = th.sigmoid(gestalt_rand * self.gestalt_std + self.gestalt_mean)
