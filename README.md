@@ -1,6 +1,6 @@
 # Loci
 
-*Loci is an unsupervised disentangled LOCation and Identity tracking system, which excels on the CATER and related object tracking challenges featuring emergent object permanence and stable entity disentanglement via fully unsupervised learning.* | 
+*Loci is an unsupervised disentangled LOCation and Identity tracking system, which excels on the CATER and related object tracking challenges featuring emergent object permanence and stable entity disentanglement via fully unsupervised learning.* 
 
 Paper: "Learning What and Where - Unsupervised Disentangling Location and Identity Tracking" | [arXiv](https://arxiv.org/abs/2205.13349)
 
@@ -33,7 +33,9 @@ We provide an interactive GUI to explore the learned representations of the mode
 Run the GUI (extracted latent states can be found [here](https://unitc-my.sharepoint.com/:f:/g/personal/iiimt01_cloud_uni-tuebingen_de/Et0PVeCi7OhMuaz60a5RtcMBgS4Sq-fLAZkjNJsDVFgyOw?e=fLh7xN)):
 
 ```
-python -m model.scripts.playground -cfg model/cater.json -background data/data/video/CATER/background.jpg -device 0 -load net2.pt -latent latent-0000-04.pickle
+python -m model.scripts.playground -cfg model/cater.json \
+  -background data/data/video/CATER/background.jpg -load net2.pt \
+  -latent latent-states/net2/latent-0000-07.pickle
 ```
 
 ## Training
