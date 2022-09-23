@@ -340,12 +340,12 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
                         avg_num_objects.update(th.mean(reduce((reduce(mask[:,:-1], 'b c h w -> b c', 'max') > 0.5).float(), 'b c -> b', 'sum')).item())
 
 
-                    cliped_output = th.clip(output, 0, 1)
-                    
-                    if net.get_init_status() < 2:
-                        fg_mask = th.gt(bg_error, 0.1).float().detach()
-                        target  = th.clip(target * fg_mask, 0, 1)
+                    init          = max(0, min(1, net.get_init_status()))
+                    fg_mask       = th.gt(bg_error, 0.1).float().detach()
 
+                    cliped_output = th.clip(output, 0, 1)
+                    target        = th.clip(target * fg_mask * (1 - init) + target * init, 0, 1)
+                    
                     loss = None
                     if tensor.shape[-2] >= 64 and cfg.msssim:
                         loss = msssimloss(cliped_output, target) + position_loss + object_loss + time_loss + tracking_loss

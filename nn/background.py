@@ -205,10 +205,4 @@ class PrecalculatedBackground(nn.Module):
             mask = reduce(mask, 'b c (h h2) (w w2) -> b c h w', 'mean', h = H, w = W)
 
         mask  = mask.expand(input.shape[0], 1, *input.shape[2:])
-
         return mask, background * th.tanh(self.to_inf(self.alpha * 0.5)), background
-
-
-        
-        
-    

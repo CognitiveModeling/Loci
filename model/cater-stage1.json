@@ -1,5 +1,5 @@
 {                                                                                                     
-  "model_path": "cater",
+  "model_path": "cater_stage1",
   "datatype": "cater",
   "dataset": "CATER",
   "latent_type": "snitch_tracker",
@@ -19,7 +19,7 @@
   "entity_pretraining_steps": 30000,
   "background_pretraining_steps": 0,
   "model": {
-        "level": 2,
+        "level": 1,
         "batch_size": 16,
         "num_objects": 10,
         "img_channels": 3,

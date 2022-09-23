@@ -1,11 +1,11 @@
 {                                                                                                     
-  "model_path": "cater",
+  "model_path": "cater_stage2",
   "datatype": "cater",
   "dataset": "CATER",
   "latent_type": "snitch_tracker",
   "num_workers": 2,
   "prefetch_factor": 2,
-  "learning_rate": 0.0001, 
+  "learning_rate": 0.0000333333, 
   "sequence_len": 300, 
   "backprop_steps": 1,
   "epochs": 1000,                                                                                   
@@ -19,7 +19,7 @@
   "entity_pretraining_steps": 30000,
   "background_pretraining_steps": 0,
   "model": {
-        "level": 2,
+        "level": 1,
         "batch_size": 16,
         "num_objects": 10,
         "img_channels": 3,
@@ -28,7 +28,7 @@
         "gestalt_size": 96,
         "object_regularizer": 1,
         "position_regularizer": 1,
-        "supervision_factor": 0.01,
+        "supervision_factor": 0.1,
         "time_regularizer": 1,
         "encoder": {
             "channels": 48,
@@ -48,7 +48,7 @@
             "num_layers": 5
         },
         "background": {
-            "learning_rate": 0.0001, 
+            "learning_rate": 0.0000333333, 
             "num_layers": 1, 
             "reg_lambda": 1e-10,
             "latent_channels": 48,
