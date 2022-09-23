@@ -43,7 +43,7 @@ python -m model.scripts.playground -cfg model/cater.json \
 Training can be started with:
 
 ```
-python -m model.main -train -cfg model/cater.json
+python -m model.main -train -cfg model/cater-stage1.json
 ```
 
 ## Evaluation
