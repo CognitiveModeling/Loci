@@ -11,14 +11,14 @@ import utils
 
 __author__ = "Manuel Traub"
 
-class GPMerge(nn.Module):
+class GestaltPositionMerge(nn.Module):
     def __init__(
         self, 
         latent_size: Union[int, Tuple[int, int]],
         num_objects: int
     ):
 
-        super(GPMerge, self).__init__()
+        super(GestaltPositionMerge, self).__init__()
         self.num_objects = num_objects
 
         self.gaus2d = Gaus2D(size=latent_size)
@@ -72,7 +72,7 @@ class AggressiveUpConv(nn.Module):
         skip = repeat(skip, 'b c h w -> b c (h h2) (w w2)', h2=s, w2=s)
         return skip + self.alpha * self.layers(input)
 
-class GPDecoder(nn.Module):
+class LociDecoder(nn.Module):
     def __init__(
         self, 
         latent_size: Union[int, Tuple[int, int]],
@@ -84,7 +84,7 @@ class GPDecoder(nn.Module):
         num_layers: int,
     ): 
 
-        super(GPDecoder, self).__init__()
+        super(LociDecoder, self).__init__()
         self.to_batch  = SharedObjectsToBatch(num_objects)
         self.to_shared = BatchToSharedObjects(num_objects)
         self.level     = 1
@@ -93,88 +93,34 @@ class GPDecoder(nn.Module):
         level1_factor   = level1_channels // img_channels
         print(f"Level1 channels: {level1_channels}")
 
-        self.merge = GPMerge(
+        self.merge = GestaltPositionMerge(
             latent_size = latent_size,
             num_objects = num_objects,
         )
 
-        _layer0 = []
-        _layer0.append(
-            ResidualBlock(
-                in_channels  = gestalt_size,
-                out_channels = hidden_channels,
-                input_nonlinearity = False
-            )
-        )
-        for i in range(num_layers-1):
-            _layer0.append(
-                ResidualBlock(
-                    in_channels  = hidden_channels,
-                    out_channels = hidden_channels
-                )
-            )
-        self.layer0 = nn.Sequential(*_layer0)
-
-        self.to_mask_level0 = ResidualBlock(
-            in_channels  = hidden_channels,
-            out_channels = hidden_channels,
+        self.layer0 = nn.Sequential(
+            ResidualBlock(gestalt_size, hidden_channels, input_nonlinearity = False),
+            *[ResidualBlock(hidden_channels, hidden_channels) for _ in range(num_layers-1)],
         )
 
-        self.to_mask_level1 = AggressiveUpConv(
-            in_channels  = hidden_channels,
-            img_channels = level1_factor,
-        )
+        self.to_mask_level0 = ResidualBlock(hidden_channels, hidden_channels)
+        self.to_mask_level1 = AggressiveUpConv(hidden_channels, level1_factor)
 
         self.to_mask_level2 = nn.Sequential(
-            ResidualBlock(
-                in_channels    = hidden_channels,
-                out_channels   = hidden_channels,
-            ),
-            ResidualBlock(
-                in_channels    = hidden_channels,
-                out_channels   = hidden_channels,
-            ),
-            AggressiveUpConv(
-                in_channels  = hidden_channels,
-                img_channels = 4,
-                alpha = 1
-            ),
-            AggressiveUpConv(
-                in_channels  = 4,
-                img_channels = 1,
-                alpha = 1
-            )
+            ResidualBlock(hidden_channels, hidden_channels),
+            ResidualBlock(hidden_channels, hidden_channels),
+            AggressiveUpConv(hidden_channels, 4, alpha = 1),
+            AggressiveUpConv(4, 1, alpha = 1),
         )
 
-        self.to_object_level0 = ResidualBlock(
-            in_channels  = hidden_channels,
-            out_channels = hidden_channels,
-        )
-
-        self.to_object_level1 = AggressiveUpConv(
-            in_channels  = hidden_channels,
-            img_channels = level1_channels,
-        )
+        self.to_object_level0 = ResidualBlock(hidden_channels, hidden_channels)
+        self.to_object_level1 = AggressiveUpConv(hidden_channels, level1_channels)
 
         self.to_object_level2 = nn.Sequential(
-            ResidualBlock(
-                in_channels    = hidden_channels,
-                out_channels   = hidden_channels,
-            ),
-            ResidualBlock(
-                in_channels    = hidden_channels,
-                out_channels   = hidden_channels,
-            ),
-            AggressiveUpConv(
-                in_channels  = hidden_channels,
-                img_channels = 12,
-                alpha = 1
-            ),
-            AggressiveUpConv(
-                in_channels  = 12,
-                img_channels = img_channels,
-                alpha = 1
-            )
+            ResidualBlock(hidden_channels, hidden_channels),
+            ResidualBlock(hidden_channels, hidden_channels),
+            AggressiveUpConv(hidden_channels, 12, alpha = 1),
+            AggressiveUpConv(12, img_channels, alpha = 1),
         )
 
         self.mask_to_pixel = nn.ModuleList([

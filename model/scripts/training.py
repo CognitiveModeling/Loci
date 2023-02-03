@@ -88,7 +88,9 @@ def load_model(
     # backward compatibility
     model = {}
     for k, v in state['model'].items():
-        model[k.replace("module.","")] = v
+        k = k.replace(".module.", ".")
+        k = k.replace("predictor.vae","predictor.bottleneck")
+        model[k] = v
 
     net.load_state_dict(model)
 
@@ -113,7 +115,6 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
         cfg.save(path)
 
     cfg_net = cfg.model
-    sampler = ExponentialSampler(0.9999)
 
     background = None
     if world_size > 0:
@@ -123,8 +124,7 @@ def train_eprop(rank: int, world_size: int, cfg: Configuration, trainset: Datase
         cfg = cfg_net,
         camera_view_matrix = trainset.cam if cfg.datatype == 'cater' else None,
         zero_elevation     = trainset.z if cfg.datatype == 'cater' else None,
-        sampler = sampler if cfg.scheduled_sampling else None,
-        teacher_forcing = cfg.teacher_forcing
+        teacher_forcing    = cfg.teacher_forcing
     )
 
     net = net.to(device=device)
@@ -509,7 +509,6 @@ def eval_net(net_parallel, prefix, dataset, dataloader, device, cfg, epoch):
             priority    = None
             mask        = None
             object      = None
-            net.sampler = None
             output      = None
             loss        = th.tensor(0)
 

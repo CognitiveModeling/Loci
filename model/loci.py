@@ -4,10 +4,9 @@ import numpy as np
 from typing import Tuple
 from einops import rearrange, repeat, reduce
 from utils.optimizers import SDAMSGrad
-from utils.scheduled_sampling import ScheduledSampler
-from nn.decoder import GPDecoder
-from nn.encoder import GPEncoder
-from nn.predictor import LatentEpropPredictor
+from nn.decoder import LociDecoder
+from nn.encoder import LociEncoder
+from nn.predictor import LociPredictor
 from utils.utils import PrintGradient, InitialLatentStates
 from utils.loss import MaskModulatedObjectLoss, ObjectModulator, TranslationInvariantObjectLoss, PositionLoss
 from nn.background import BackgroundEnhancer, PrecalculatedBackground
@@ -18,19 +17,14 @@ class Loci(nn.Module):
         cfg,
         camera_view_matrix = None,
         zero_elevation = None,
-        sampler: ScheduledSampler = None,
-        closed_loop=False,
         teacher_forcing=1
     ):
         super(Loci, self).__init__()
 
-        self.closed_loop = closed_loop
         self.teacher_forcing = teacher_forcing
         self.cfg = cfg
 
-        self.sampler = sampler
-
-        self.encoder = GPEncoder(
+        self.encoder = LociEncoder(
             input_size       = cfg.input_size,
             latent_size      = cfg.latent_size,
             num_objects      = cfg.num_objects,
@@ -40,10 +34,9 @@ class Loci(nn.Module):
             num_layers       = cfg.encoder.num_layers,
             gestalt_size     = cfg.gestalt_size,
             batch_size       = cfg.batch_size,
-            reg_lambda       = cfg.encoder.reg_lambda,
         )
 
-        self.predictor = LatentEpropPredictor(
+        self.predictor = LociPredictor(
             num_objects        = cfg.num_objects,
             gestalt_size       = cfg.gestalt_size,
             heads              = cfg.predictor.heads,
@@ -54,7 +47,7 @@ class Loci(nn.Module):
             zero_elevation     = zero_elevation
         )
 
-        self.decoder = GPDecoder(
+        self.decoder = LociDecoder(
             latent_size      = cfg.latent_size,
             num_objects      = cfg.num_objects,
             gestalt_size     = cfg.gestalt_size,
@@ -91,7 +84,6 @@ class Loci(nn.Module):
         self.mask_modulated_object_loss        = MaskModulatedObjectLoss(cfg.num_objects, teacher_forcing)
         self.position_loss                     = PositionLoss(cfg.num_objects, teacher_forcing)
         self.modulator                         = ObjectModulator(cfg.num_objects)
-        self.print_gradient                    = PrintGradient("GPNet")
 
         self.background.set_level(cfg.level)
         self.encoder.set_level(cfg.level)
@@ -132,17 +124,6 @@ class Loci(nn.Module):
             return self.background(*input)[1]
 
         return self.run_end2end(*input, evaluate=evaluate, test=test)
-
-    def run_encoder(
-        self, 
-        input: th.Tensor, 
-        error: th.Tensor,
-        mask: th.Tensor = None,
-        object: th.Tensor = None,
-        position: th.Tensor = None,
-        priority: th.Tensor = None
-    ):
-        return self.encoder(th.cat((input, error), dim=1), mask, object, position, priority)
 
     def run_decoder(
         self, 
@@ -215,7 +196,7 @@ class Loci(nn.Module):
         bg_mask, background, raw_background = self.background(input, error, mask[:,-1:])
 
         # position and gestalt for the current time point
-        position, gestalt, priority = self.run_encoder(input, error, mask, object_last, position, priority)
+        position, gestalt, priority = self.encoder(input, error, mask, object_last, position, priority)
 
         # position and gestalt for the next time point
         position, gestalt, priority, snitch_position = self.predictor(position, gestalt, priority) 

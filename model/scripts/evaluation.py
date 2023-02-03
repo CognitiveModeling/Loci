@@ -203,7 +203,6 @@ def eval_mnist(cfg: Configuration, dataset: Dataset, file, active_layer, activit
     # create model 
     net = Loci(
         cfg_net,
-        closed_loop = False,
         teacher_forcing = 1000000
     )
 
@@ -314,8 +313,7 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
         cfg_net,
         camera_view_matrix = dataset.cam if cfg.datatype == 'cater' else None,
         zero_elevation     = dataset.z if cfg.datatype == 'cater' else None,
-        closed_loop = False,
-        teacher_forcing = 1000000
+        teacher_forcing    = 1000000
     )
 
     # load model
@@ -325,8 +323,10 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
 
         # backward compatibility
         model = {}
-        for key, value in state["model"].items():
-            model[key.replace(".module.", ".")] = value
+        for k, v in state["model"].items():
+            k = k.replace(".module.", ".")
+            k = k.replace("predictor.vae","predictor.bottleneck")
+            model[k] = v
 
         net.load_state_dict(model)
 
@@ -460,7 +460,7 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
                     img[:,10+size[0]+10:(size[0]+10)*2, 10+size[1]+10:(size[1]+10)*2]  = position_next3d[0]
                     
                     img = rearrange(img * 255, 'c h w -> h w c').cpu().numpy()
-                    cv2.imwrite(f'gpnet-nice-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', img)
+                    cv2.imwrite(f'loci-nice-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', img)
 
 
                 if object_view:
@@ -483,20 +483,20 @@ def save(cfg: Configuration, dataset: Dataset, file, active_layer, size, object_
                             img[:,18+3*(size[0]+6):18+size[0]*4+18,18+size[1]*2+6+o*(6+size[1]):18+size[1]*2+(o+1)*(6+size[1])] = to_rgb_object(mask_next[0,o*2+1], o*2+1)
 
                     img = rearrange(img * 255, 'c h w -> h w c').cpu().numpy()
-                    cv2.imwrite(f'gpnet-objects-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', img)
+                    cv2.imwrite(f'loci-objects-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', img)
 
                 if individual_views:
-                    cv2.imwrite(f'gp-input-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(input[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-background-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(background_next[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-bg-error-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(bg_error[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-position-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(position_next3d[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-output-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(output[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-highlited-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(highlited_input[0] * 255, 'c h w -> h w c').cpu().numpy())
-                    cv2.imwrite(f'gp-error-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(error_next[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-input-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(input[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-background-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(background_next[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-bg-error-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(bg_error[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-position-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(position_next3d[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-output-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(output[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-highlited-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(highlited_input[0] * 255, 'c h w -> h w c').cpu().numpy())
+                    cv2.imwrite(f'loci-error-{i:04d}-{t+cfg.teacher_forcing:03d}.jpg', rearrange(error_next[0] * 255, 'c h w -> h w c').cpu().numpy())
 
                     for o in range(cfg_net.num_objects + 1):
-                        cv2.imwrite(f'gp-mask-{i:04d}-{t+cfg.teacher_forcing:03d}-{o:02d}.jpg', rearrange(mask_next[0,o] * 255, 'c h w -> h w c').cpu().numpy())
-                        cv2.imwrite(f'gp-object-{i:04d}-{t+cfg.teacher_forcing:03d}-{o:02d}.jpg', rearrange(object_next[0,o] * 255, 'c h w -> h w c').cpu().numpy())
+                        cv2.imwrite(f'loci-mask-{i:04d}-{t+cfg.teacher_forcing:03d}-{o:02d}.jpg', rearrange(mask_next[0,o] * 255, 'c h w -> h w c').cpu().numpy())
+                        cv2.imwrite(f'loci-object-{i:04d}-{t+cfg.teacher_forcing:03d}-{o:02d}.jpg', rearrange(object_next[0,o] * 255, 'c h w -> h w c').cpu().numpy())
 
 def export_dataset(cfg: Configuration, trainset: Dataset, testset: Dataset, net_file, hdf5_path):
 
@@ -529,7 +529,6 @@ def export_latent(cfg: Configuration, dataset: Dataset, net_file, hdf5_file, hdf
     # create model 
     net = Loci(
         cfg_net,
-        closed_loop = False,
         teacher_forcing = 1000000
     )
 
@@ -578,7 +577,6 @@ def export_latent(cfg: Configuration, dataset: Dataset, net_file, hdf5_file, hdf
             priority    = None
             mask        = None
             object      = None
-            net.sampler = None
             output      = None
             loss        = th.tensor(0)
 
@@ -817,8 +815,7 @@ def evaluate(cfg: Configuration, num_gpus: int, dataset: Dataset, file, active_l
         cfg = cfg_net,
         camera_view_matrix = dataset.cam if cfg.datatype == 'cater' else None,
         zero_elevation     = dataset.z if cfg.datatype == 'cater' else None,
-        sampler = sampler if cfg.scheduled_sampling else None,
-        teacher_forcing = cfg.teacher_forcing
+        teacher_forcing    = cfg.teacher_forcing
     )
 
     net = net.to(device=device)

@@ -163,7 +163,7 @@ class PriorityEncoder(nn.Module):
 
         return priority * 25
 
-class LatentEpropPredictor(nn.Module): 
+class LociPredictor(nn.Module): 
     def __init__(
         self, 
         heads: int, 
@@ -175,7 +175,7 @@ class LatentEpropPredictor(nn.Module):
         camera_view_matrix = None,
         zero_elevation = None
     ):
-        super(LatentEpropPredictor, self).__init__()
+        super(LociPredictor, self).__init__()
         self.num_objects = num_objects
         self.std_alpha   = nn.Parameter(th.zeros(1)+1e-16)
 
@@ -198,7 +198,7 @@ class LatentEpropPredictor(nn.Module):
                 zero_elevation     = zero_elevation
             )
 
-        self.vae = nn.Sequential(
+        self.bottleneck = nn.Sequential(
             LambdaModule(lambda x: rearrange(x, 'b c -> b c 1 1')),
             ResidualBlock(gestalt_size, gestalt_size, kernel_size=1),
             nn.Sigmoid(),
@@ -246,7 +246,7 @@ class LatentEpropPredictor(nn.Module):
         position = th.cat((xy, std * self.std_alpha), dim=1)
         
         position = self.to_shared(position)
-        gestalt  = self.vae(gestalt)
+        gestalt  = self.bottleneck(gestalt)
         priority = self.priority_encoder(priority)
 
         return position, gestalt, priority, snitch_position

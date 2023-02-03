@@ -26,9 +26,9 @@ class NeighbourChannels(nn.Module):
     def forward(self, input: th.Tensor):
         return nn.functional.conv2d(input, self.weights)
 
-class ObjectTracker(nn.Module):
+class InputPreprocessing(nn.Module):
     def __init__(self, num_objects: int, size: Union[int, Tuple[int, int]]): 
-        super(ObjectTracker, self).__init__()
+        super(InputPreprocessing, self).__init__()
         self.num_objects = num_objects
         self.neighbours  = NeighbourChannels(num_objects)
         self.prioritize  = Prioritize(num_objects)
@@ -39,6 +39,7 @@ class ObjectTracker(nn.Module):
     def forward(
         self, 
         input: th.Tensor, 
+        error: th.Tensor, 
         mask: th.Tensor,
         object: th.Tensor,
         position: th.Tensor,
@@ -59,6 +60,7 @@ class ObjectTracker(nn.Module):
         others_gaus2d = self.neighbours(self.prioritize(own_gaus2d, priority))
         
         input         = repeat(input,            'b c h w -> b o c h w', o = self.num_objects)
+        error         = repeat(error,            'b 1 h w -> b o 1 h w', o = self.num_objects)
         bg_mask       = rearrange(bg_mask,       'b o h w -> b o 1 h w')
         mask_others   = rearrange(mask_others,   'b o h w -> b o 1 h w')
         mask          = rearrange(mask,          'b o h w -> b o 1 h w')
@@ -66,7 +68,7 @@ class ObjectTracker(nn.Module):
         own_gaus2d    = rearrange(own_gaus2d,    'b o h w -> b o 1 h w')
         others_gaus2d = rearrange(others_gaus2d, 'b o h w -> b o 1 h w')
         
-        output = th.cat((input, mask, mask_others, bg_mask, object, own_gaus2d, others_gaus2d), dim=2) 
+        output = th.cat((input, error, mask, mask_others, bg_mask, object, own_gaus2d, others_gaus2d), dim=2) 
         output = rearrange(output, 'b o c h w -> (b o) c h w')
 
         return output
@@ -177,7 +179,7 @@ class PixelToPriority(nn.Module):
         assert input.shape[1] == 1
         return reduce(th.tanh(input), 'b c h w -> b c', 'mean')
 
-class GPEncoder(nn.Module):
+class LociEncoder(nn.Module):
     def __init__(
         self,
         input_size: Union[int, Tuple[int, int]], 
@@ -189,12 +191,10 @@ class GPEncoder(nn.Module):
         num_layers: int,
         gestalt_size: int,
         batch_size: int,
-        reg_lambda: float
     ):
-        super(GPEncoder, self).__init__()
+        super(LociEncoder, self).__init__()
 
         self.num_objects  = num_objects
-        self.gestalt_size = gestalt_size
         self.latent_size  = latent_size
         self.level        = 1
 
@@ -202,10 +202,10 @@ class GPEncoder(nn.Module):
 
         print(f"Level1 channels: {level1_channels}")
 
-        self.tracker = nn.ModuleList([
-            ObjectTracker(num_objects, (input_size[0] // 16, input_size[1] // 16)),
-            ObjectTracker(num_objects, (input_size[0] //  4, input_size[1] //  4)),
-            ObjectTracker(num_objects, (input_size[0], input_size[1]))
+        self.preprocess = nn.ModuleList([
+            InputPreprocessing(num_objects, (input_size[0] // 16, input_size[1] // 16)),
+            InputPreprocessing(num_objects, (input_size[0] //  4, input_size[1] //  4)),
+            InputPreprocessing(num_objects, (input_size[0], input_size[1]))
         ])
 
         self.to_channels = nn.ModuleList([
@@ -214,73 +214,37 @@ class GPEncoder(nn.Module):
             SkipConnection(img_channels, img_channels)
         ])
 
-        _layers2 = []
-        _layers2.append(AggressiveDownConv(img_channels, level1_channels))
-        for i in range(num_layers):
-            _layers2.append(ResidualBlock(level1_channels, level1_channels, alpha_residual=True))
-
-        _layers1 = []
-        _layers1.append(AggressiveDownConv(level1_channels, hidden_channels))
-
-        _layers0 = []
-        for i in range(num_layers):
-            _layers0.append(
-                ResidualBlock(
-                    in_channels  = hidden_channels,
-                    out_channels = hidden_channels
-                )
-            )
-
-        self.layers2 = nn.Sequential(*_layers2)
-        self.layers1 = nn.Sequential(*_layers1)
-        self.layers0 = nn.Sequential(*_layers0)
-
-        _position_encoder = []
-        for i in range(num_layers):
-            _position_encoder.append(
-                ResidualBlock(
-                    in_channels  = hidden_channels,
-                    out_channels = hidden_channels
-                )
-            )
-        _position_encoder.append(
-            ResidualBlock(
-                in_channels  = hidden_channels,
-                out_channels = 3
-            )
+        self.layers2 = nn.Sequential(
+            AggressiveDownConv(img_channels, level1_channels),
+            *[ResidualBlock(level1_channels, level1_channels, alpha_residual=True) for _ in range(num_layers)]
         )
-        self.position_encoder = nn.Sequential(*_position_encoder)
+
+        self.layers1 = nn.Sequential(AggressiveDownConv(level1_channels, hidden_channels))
+
+        self.layers0 = nn.Sequential(
+            *[ResidualBlock(hidden_channels, hidden_channels) for _ in range(num_layers)]
+        )
+
+        self.position_encoder = nn.Sequential(
+            *[ResidualBlock(hidden_channels, hidden_channels) for _ in range(num_layers)],
+            ResidualBlock(hidden_channels, 3),
+        )
 
         self.xy_encoder = PixelToPosition(latent_size)
         self.std_encoder = PixelToSTD()
         self.priority_encoder = PixelToPriority()
 
-        _gestalt_encoder = []
-        _gestalt_encoder.append( 
+        gestalt_channels = max(hidden_channels, gestalt_size)
+        self.gestalt_encoder = nn.Sequential(
             AggressiveConvTo1x1(
                 in_channels = hidden_channels, 
-                out_channels = max(hidden_channels, gestalt_size),
+                out_channels = gestalt_channels,
                 size = latent_size
-            )
+            ),
+            *[ResidualBlock(gestalt_channels, gestalt_channels, kernel_size = 1) for _ in range(num_layers)],
+            ResidualBlock(gestalt_channels, gestalt_size, kernel_size = 1),
+            LambdaModule(lambda x: rearrange(x, 'b c 1 1 -> b c')),
         )
-        for i in range(num_layers):
-            _gestalt_encoder.append(
-                ResidualBlock(
-                    in_channels  = max(hidden_channels, gestalt_size),
-                    out_channels = max(hidden_channels, gestalt_size),
-                    kernel_size  = 1
-                )
-            )
-        _gestalt_encoder.append(
-            ResidualBlock(
-                in_channels  = max(hidden_channels, gestalt_size),
-                out_channels = gestalt_size, 
-                kernel_size  = 1 
-            )
-        )
-        _gestalt_encoder.append(LambdaModule(lambda x: rearrange(x, 'b c 1 1 -> b c')))
-
-        self.gestalt_encoder = nn.Sequential(*_gestalt_encoder)
 
     def set_level(self, level):
         self.level = level
@@ -288,13 +252,14 @@ class GPEncoder(nn.Module):
     def forward(
         self, 
         input: th.Tensor,
+        error: th.Tensor,
         mask: th.Tensor,
         object: th.Tensor,
         position: th.Tensor,
         priority: th.Tensor
     ):
         
-        latent = self.tracker[self.level](input, mask, object, position, priority)
+        latent = self.preprocess[self.level](input, error, mask, object, position, priority)
         latent = self.to_channels[self.level](latent)
 
         if self.level >= 2:
