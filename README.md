@@ -18,7 +18,7 @@ conda activate loci
 
 ## Dataset and trained models
 
-A preprocessed CATER dataset together with the 5 trained networks from the paper can be found [here](https://unitc-my.sharepoint.com/:f:/g/personal/iiimt01_cloud_uni-tuebingen_de/Et0PVeCi7OhMuaz60a5RtcMBgS4Sq-fLAZkjNJsDVFgyOw?e=fLh7xN](https://unitc-my.sharepoint.com/:f:/g/personal/iiimt01_cloud_uni-tuebingen_de/Et0PVeCi7OhMuaz60a5RtcMBgS4Sq-fLAZkjNJsDVFgyOw?e=WzMItA)
+A preprocessed CATER dataset together with the 5 trained networks from the paper can be found [here](https://unitc-my.sharepoint.com/:f:/g/personal/iiimt01_cloud_uni-tuebingen_de/Et0PVeCi7OhMuaz60a5RtcMBgS4Sq-fLAZkjNJsDVFgyOw?e=fLh7xN](https://unitc-my.sharepoint.com/:f:/g/personal/iiimt01_cloud_uni-tuebingen_de/Et0PVeCi7OhMuaz60a5RtcMBgS4Sq-fLAZkjNJsDVFgyOw?e=WzMItA))
 
 The dataset folder (CATER) needs to be copied to ```data/data/video/```
 
